@@ -1,0 +1,24 @@
+underlying,scope,family,name,confidence,note
+SPX,broad,S&P 500,S&P 500 Index,high,roots SPX SPXW 2SPX 4SPX
+XSP,broad,S&P 500,Mini-SPX (1/10 SPX),high,
+NANOS,broad,S&P 500,S&P 500 Nanos,medium,
+OEX,broad,S&P 100,S&P 100 Index,high,also XEO
+XEO,broad,S&P 100,S&P 100 Index (European),high,
+NDX,broad,Nasdaq-100,Nasdaq-100 Index,high,roots NDX NDXP
+XND,broad,Nasdaq-100,Nasdaq-100 Micro Index (1/100 NDX),high,
+RUT,broad,Russell 2000,Russell 2000 Index,high,roots RUT RUTW
+MRUT,broad,Russell 2000,Mini-Russell 2000 (1/10 RUT),high,
+DJX,broad,Dow,Dow Jones Industrial Average (1/100),high,
+VIX,broad,VIX,Cboe Volatility Index,high,volatility index; kept in index options and broken out by family
+MXEA,broad,MSCI,MSCI EAFE Index,high,
+MXEF,broad,MSCI,MSCI Emerging Markets Index,high,
+MXACW,broad,MSCI,MSCI ACWI Index,high,
+MXWLD,broad,MSCI,MSCI World Index,high,
+MXUSA,broad,MSCI,MSCI USA Index,high,
+XAU,narrow,Sector,PHLX Gold/Silver Sector Index,low,sector index; confirm narrow-based status
+MGTN,unclassified,Other,,low,"Cboe product; component count/weights not checked, confirm scope"
+CBTX,unclassified,Other,,low,"Cboe bitcoin-ETF-linked index; confirm scope"
+MBTX,unclassified,Other,,low,"mini version of CBTX; confirm scope"
+XSPBX,unclassified,Other,,low,"XSP-linked Cboe product; confirm what it is"
+MRTBX,unclassified,Other,,low,"MRUT-linked Cboe product; confirm what it is"
+SPEQX,unclassified,Other,,low,"S&P-linked Cboe product; confirm what it is"

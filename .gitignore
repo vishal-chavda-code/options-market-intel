@@ -1,0 +1,21 @@
+# Data, logs and outputs never leave the machine they were produced on (spec C3).
+data/
+logs/
+exports/
+probe_samples/
+
+# Local config: proxy, CA bundle path, contact email.
+config/config.yaml
+.env
+
+# Python / tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

@@ -1,0 +1,10 @@
+# Fixtures must stay byte-identical to what the servers sent (CRLF, trailing commas, BOMs).
+tests/fixtures/** -text
+
+# Seed snapshot: gzip and Parquet files, never diffed or line-ending converted.
+seed/raw/** binary
+seed/tables/** binary
+seed/meta/** binary
+
+# PowerShell helpers run on Windows.
+*.ps1 text eol=crlf

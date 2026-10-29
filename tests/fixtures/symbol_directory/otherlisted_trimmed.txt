@@ -1,0 +1,6 @@
+ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
+A|Agilent Technologies, Inc. Common Stock|N|A|N|100|N|A
+BRK.B|Berkshire Hathaway Inc. New Common Stock|N|BRK.B|N|40|N|BRK.B
+IWM|iShares Russell 2000 Index Fund|P|IWM|Y|40|N|IWM
+SPY|State Street SPDR S&P 500 ETF Trust|P|SPY|Y|40|N|SPY
+File Creation Time: 1029202617:01||||||
