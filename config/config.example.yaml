@@ -29,8 +29,21 @@ sources:
   occ_weekly_class:    {enabled: true, classes: [etf, equity, index], backfill_start: "2024-10-25"}
   occ_daily_volume:    {enabled: true, backfill_start: "2024-11-01"}  # market-wide daily totals (one month-to-date file per month)
   cboe_daily:          {enabled: true, backfill_start: "2019-10-07"}  # Cboe-exchange-only Index/ETP/Equity volume, OI, P/C
+  # Every listed contract's open interest, volume, quote and greeks (Cboe delayed chains;
+  # undocumented endpoint, see PROJECT_SPEC.md 5.4 -- get compliance sign-off). A snapshot of
+  # "now": taken only on the session's own evening after snapshot_after_et, never backfilled.
+  # ~4,300 requests a night with scope "all" (~75-90 min at 1 req/s on cdn.cboe.com).
+  cboe_chains:
+    enabled: true
+    scope: all                 # all | top_n | universe
+    top_n: 500                 # used when scope is top_n
+    retention_sessions: 45     # rolling window of chain_eod days kept; older days are deleted
+    keep_raw_sessions: 3       # raw JSON is ~10x the Parquet size, so keep only a few days
+    snapshot_after_et: "16:15"
+    enforce_window: true       # false = allow a snapshot at any time (testing only)
+    commit_every: 200
+    symbol_overrides: {}       # OCC underlying -> Cboe URL symbol, e.g. {BRKB: BRK.B}
   # Probed but not ingested yet.
-  cboe_chains:    {enabled: true,  eod: true, intraday: false, intraday_minutes: 15}
   cftc_cot:       {enabled: true,  dataset: gpe5-46if, markets: []}   # fill codes after discovery
   treasury:       {enabled: true}
   fred:           {enabled: true,  api_key_env: FRED_API_KEY, series: [SP500, VIXCLS, DGS3MO, DGS2, DGS10, T10Y2Y, BAMLH0A0HYM2, NFCI]}
@@ -50,6 +63,10 @@ schedule:
   daily_et: "19:30"
   retry_et: "07:30"
   cot_et: "Fri 16:00"
+report:
+  template: null             # path to a corporate .pptx (layouts "Title Slide" / "Title Only")
+  sessions: 20               # sessions on the activity chart
+  top_n: 15                  # rows per ranked table
 app:
   refresh_seconds: 300
   intraday_refresh_seconds: 60

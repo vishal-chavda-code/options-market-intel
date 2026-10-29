@@ -19,6 +19,7 @@ source facts are in [PROJECT_SPEC.md](PROJECT_SPEC.md); start with its Section 0
 | `occ_daily_volume` | Market-wide daily totals (equity incl. ETF vs index) | ~2 years |
 | `cboe_daily` | Cboe exchange only: open interest and put/call ratios by category | years (via `?dt=`) |
 | `symbol_directory` | ETF Y/N flag for every US listing (Nasdaq Trader) | current, snapshotted daily |
+| `cboe_chains` | **Every listed contract, every optionable symbol**: open interest, volume, bid/ask/last, IV, greeks (Cboe delayed chains) | none at the source: a nightly snapshot, kept for a rolling **45 sessions** |
 
 ETF vs single stock comes from the symbol directory, and index vs stock from OCC's product code.
 Index broad vs narrow comes from [config/reference/index_underlyings.csv](config/reference/index_underlyings.csv),
@@ -49,6 +50,15 @@ scripts\run_probe.ps1                    # 1. can this network reach every sourc
 .venv\Scripts\omi daily                  # 4. nightly: last session + 5-session catch-up, then features
 .venv\Scripts\omi health                 # freshness and errors per source
 scripts\run_app.ps1                      # dashboard at http://localhost:8501
+scripts\register_tasks.ps1               # 5. schedule it: 19:30 ET nightly (+ report), 07:30 retry
+```
+
+On demand:
+
+```powershell
+.venv\Scripts\omi chain AAPL             # any symbol's full chain right now: OI by expiry, top strikes, CSV in exports\
+.venv\Scripts\omi chain SPX --expiry 2026-11-20
+.venv\Scripts\omi report                 # PowerPoint: exports\omi_report_YYYYMMDD.pptx (also done nightly)
 ```
 
 Re-running any of these is safe. Anything already stored as `ok` is skipped. Dates a source
@@ -66,8 +76,34 @@ www.cboe.com):
 | `cboe_daily` from 2019-10-07 | ~1,780 | ~1.5 h |
 | `occ_symbol_volume` from 2024-11-01, 55 symbols | ~27,000 | ~8 h (run overnight, or pass a later `--start`) |
 
-Scheduling (`register_tasks.ps1`, 19:30 ET daily + 07:30 ET retry) is the next phase. Until then,
-create a Windows Task Scheduler task that runs `.venv\Scripts\omi.exe daily` from the repo folder.
+### Option chains (open interest for every contract)
+
+`cboe_chains` snapshots the full chain of every optionable underlying OCC reported volume for
+(~4,300 names, ~1.5M contracts) once a night. Notes:
+
+- **Snapshot, not history.** Cboe only serves "now", so nothing can be backfilled. The source
+  runs only on the session's own evening after 16:15 ET (`snapshot_after_et`); the 07:30 retry
+  skips it. So every stored day means the same thing: closing quotes, and OCC's
+  **start-of-session** open interest (OCC recomputes OI overnight; day-over-day changes in the
+  snapshots are the OI changes).
+- **Run time:** ~4,300 requests at 1 req/s on `cdn.cboe.com` = ~75 min of downloading plus
+  ~2 min of processing (measured on a full-size synthetic run). `scope: top_n` (default
+  500 names) or `scope: universe` cuts that down.
+- **Storage:** ~50-100 MB of Parquet per day (the synthetic test with random values was
+  98 MB; real chains compress better), so **2-5 GB for the 45-session window**. Older days
+  are deleted automatically (`retention_sessions`); raw JSON is kept for 3 sessions only.
+- **Undocumented endpoint**: it backs cboe.com's quote pages and can change without notice.
+  Get compliance sign-off for internal use before relying on it (PROJECT_SPEC.md §13).
+- Share-class names: OCC writes `BRKB`; the Cboe URL uses the listed form (`BRK.B`) from the
+  symbol directory. If a name keeps coming back `not_available`, add it to
+  `cboe_chains.symbol_overrides`.
+
+### Scheduling
+
+`scripts\register_tasks.ps1` creates two Windows scheduled tasks (local time, which should be
+Eastern): **omi daily** Mon-Fri 19:30 (sources, chain snapshot, features, PowerPoint report) and
+**omi retry** Tue-Sat 07:30. Remove them with `-Remove`. If policy blocks Task Scheduler, run
+`scripts\run_daily.ps1 -Report` by hand each evening.
 
 ## Dashboard pages
 
@@ -80,6 +116,17 @@ create a Windows Task Scheduler task that runs `.venv\Scripts\omi.exe daily` fro
   customer opening share, opening buys vs sells, small-lot (1–10) share as a retail proxy.
 - **Cboe open interest**: open interest and P/C ratios by category (Cboe exchange only).
 - **Data health**: per-source freshness, archive coverage, recent problems.
+- **Open interest**: from the chain snapshots. Market-wide biggest OI builds and unwinds by
+  underlying (filter by class), largest contract-level OI changes, and per symbol: OI and OI
+  change by strike for an expiry, OI by expiry, OI history over the 45-session window.
+
+## PowerPoint report
+
+`omi report` (run nightly by the scheduled task) writes `exports\omi_report_YYYYMMDD.pptx`
+from the same feature files the dashboard reads, so the two always agree. Slides: activity by
+product class (native, editable chart), largest OI builds, largest OI unwinds, largest
+contract-level OI changes. Set `report.template` to a corporate .pptx to use its theme
+(layouts named "Title Slide" and "Title Only").
 
 The app is read-only: it never calls external sources. Every chart has a table view with a CSV
 download. Badges are green (current), orange (1 session behind) or red (stale or failing).
@@ -128,7 +175,8 @@ src/omi/calendar.py      NYSE sessions; OCC week endings (calendar Fridays)
 src/omi/storage.py       raw gz archive, Parquet tables with PK upserts, ingest log
 src/omi/runner.py        plan → skip stored → fetch → raw → parse → conform → commit
 src/omi/sources/         one module per source (pure planners + parsers)
-src/omi/features/        product-class classification and daily aggregates (DuckDB)
+src/omi/features/        product-class classification, daily aggregates, chain OI features (DuckDB)
+src/omi/report.py        PowerPoint report (python-pptx)
 src/omi/pipeline.py      backfill / daily / health jobs
 app/                     Streamlit dashboard (read-only)
 config/reference/        exchange codes, index broad/narrow list
@@ -143,4 +191,7 @@ config/reference/        exchange codes, index broad/narrow list
   `/markets/us/options/market-statistics/daily`). The page doesn't print its own date, and
   for today it has no tables until Cboe publishes.
 - **`occ_symbol_volume`** is one request per symbol per day; widen `top_n` with care.
-- **Cboe delayed-quote JSON** (chains, not ingested yet) is undocumented; compliance sign-off needed.
+- **Cboe delayed-quote JSON** (`cboe_chains`) is undocumented; compliance sign-off needed. Its
+  IV/greeks are Cboe's own calc (IV 0 = not computed, stored as missing): indicative only.
+- **Chain history is only what we snapshot.** A missed evening is a permanent gap; OI changes
+  then span two sessions (`prev_as_of` shows which).

@@ -108,6 +108,12 @@ class ScheduleConfig(_Section):
     cot_et: str = "Fri 16:00"
 
 
+class ReportConfig(_Section):
+    template: Path | None = None  # corporate .pptx to take layouts/theme from (optional)
+    sessions: int = Field(default=20, ge=1)  # days shown on the activity chart
+    top_n: int = Field(default=15, ge=1)  # rows per ranked table
+
+
 class AppConfig(_Section):
     refresh_seconds: int = 300
     intraday_refresh_seconds: int = 60
@@ -124,6 +130,7 @@ class Settings(BaseSettings):
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     app: AppConfig = Field(default_factory=AppConfig)
+    report: ReportConfig = Field(default_factory=ReportConfig)
 
     _config_file: Path | None = PrivateAttr(default=None)
 
@@ -194,6 +201,11 @@ def load_settings(config_path: Path | None = None) -> Settings:
     settings.paths.data_dir = resolve_path(settings.paths.data_dir)
     settings.paths.exports_dir = resolve_path(settings.paths.exports_dir)
     settings.paths.logs_dir = resolve_path(settings.paths.logs_dir)
+    if settings.report.template is not None:
+        settings.report.template = resolve_path(settings.report.template)
+        if not settings.report.template.is_file():
+            raise ConfigError(f"report.template points to a missing file: "
+                              f"{settings.report.template}")
     if settings.universe.holdings_csv is not None:
         settings.universe.holdings_csv = resolve_path(settings.universe.holdings_csv)
 

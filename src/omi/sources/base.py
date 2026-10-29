@@ -57,6 +57,11 @@ class TableSpec:
     pk: tuple[str, ...]
     partition_col: str  # a date column
     partition: str = "year"  # year | month | day
+    # "merge": every commit rewrites the partition file (fine for small tables).
+    # "parts": commits append part files and the runner compacts them into data.parquet once
+    # the source finishes (for big tables such as option chains, where rewriting a 100 MB
+    # partition after every batch would be quadratic).
+    write_mode: str = "merge"
 
     def partition_value(self, d: date) -> str:
         if self.partition == "day":

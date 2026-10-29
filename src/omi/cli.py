@@ -1,4 +1,4 @@
-"""``omi`` command line: probe, backfill, daily, features, health, info."""
+"""``omi`` command line: probe, backfill, daily, features, health, chain, report, info."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from rich.table import Table
 from omi import __version__, pipeline
 from omi import calendar as cal
 from omi import probe as probe_mod
+from omi import report as report_mod
 from omi.config import PROJECT_ROOT, ConfigError, Settings, load_settings
-from omi.features import product_class
 from omi.http import HttpClient, describe_proxy, describe_trust, user_agent
 from omi.runner import SourceSummary
 from omi.storage import Storage
@@ -177,7 +177,7 @@ def daily(
 def features(ctx: typer.Context) -> None:
     """Rebuild the feature tables from stored data (no network)."""
     settings: Settings = ctx.obj
-    counts = product_class.build(Storage(settings.paths.data_dir), settings)
+    counts = pipeline.build_features(Storage(settings.paths.data_dir), settings)
     if not counts:
         console.print("[yellow]No contract-volume data stored yet; run `omi backfill` first.[/]")
         raise typer.Exit(1)
@@ -200,7 +200,7 @@ def import_seed(
     counts = pipeline.import_seed(settings, path)
     for name, n in counts.items():
         console.print(f"{name}: {n:,}")
-    built = product_class.build(Storage(settings.paths.data_dir), settings)
+    built = pipeline.build_features(Storage(settings.paths.data_dir), settings)
     console.print(f"features rebuilt: {', '.join(f'{k} {v:,}' for k, v in built.items())}")
 
 
@@ -220,6 +220,92 @@ def health(ctx: typer.Context) -> None:
     for row in df[cols].itertuples(index=False):
         table.add_row(*["" if pd.isna(v) else escape(str(v))[:120] for v in row])
     console.print(table)
+
+
+@app.command()
+def chain(
+    ctx: typer.Context,
+    symbol: Annotated[str, typer.Argument(help="Underlying, e.g. AAPL, SPY, SPX (index: SPX or "
+                                               "_SPX).")],
+    expiry: Annotated[
+        datetime | None,
+        typer.Option(formats=["%Y-%m-%d"], help="Only this expiry in the printed tables."),
+    ] = None,
+    top: Annotated[int, typer.Option(help="Strikes to list by open interest.")] = 10,
+    save: Annotated[bool, typer.Option(help="Write the full chain to exports/ as CSV.")] = True,
+) -> None:
+    """Fetch one symbol's full option chain now (Cboe delayed) and summarise open interest.
+
+    On demand only: nothing is written to the stored tables (the nightly job owns those).
+    """
+    from omi.sources.cboe_chains import KNOWN_INDEX, fetch_one
+
+    settings: Settings = ctx.obj
+    raw = symbol.strip().upper()
+    sym = raw.lstrip("_")
+    url_sym = raw if raw.startswith("_") else (f"_{sym}" if sym in KNOWN_INDEX else sym)
+    overrides = (settings.source("cboe_chains").model_extra or {}).get("symbol_overrides") or {}
+    url_sym = overrides.get(sym, url_sym)
+    client = HttpClient(settings.network)
+    try:
+        with console.status(f"Fetching {url_sym} chain from Cboe..."):
+            tables = fetch_one(client, sym, url_sym)
+    except Exception as exc:  # noqa: BLE001 - show the reason, exit non-zero
+        console.print(f"[red]Could not fetch {escape(url_sym)}: {escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    df, under = tables["chain_eod"], tables["chain_underlying"].iloc[0]
+    if expiry is not None:
+        df = df[df["expiry"] == expiry.date()]
+    calls, puts = df[df.cp == "C"], df[df.cp == "P"]
+    console.print(f"[bold]{escape(str(under.cboe_symbol))}[/] {under.price:,.2f}  "
+                  f"(delayed; Cboe time {under.cboe_timestamp} UTC)")
+    console.print(f"Contracts {len(df):,}  expiries {df.expiry.nunique()}  "
+                  f"call OI {calls.open_interest.sum():,}  put OI {puts.open_interest.sum():,}  "
+                  f"P/C OI {puts.open_interest.sum() / max(calls.open_interest.sum(), 1):.2f}  "
+                  f"volume {df.volume.sum():,}")
+    by_exp = (df.groupby(["expiry", "cp"])["open_interest"].sum().unstack(fill_value=0)
+              .reindex(columns=["C", "P"], fill_value=0))
+    t = Table(title="Open interest by expiry (top 12)")
+    for col in ("Expiry", "Call OI", "Put OI"):
+        t.add_column(col, justify="right")
+    for exp, row in by_exp.sort_values(by=["C", "P"], ascending=False).head(12).iterrows():
+        t.add_row(str(exp), f"{row.C:,}", f"{row.P:,}")
+    console.print(t)
+    t = Table(title=f"Top {top} contracts by open interest")
+    for col in ("Contract", "Expiry", "Strike", "C/P", "OI", "Volume", "Bid", "Ask", "IV"):
+        t.add_column(col, justify="right")
+    for r in df.nlargest(top, "open_interest").itertuples(index=False):
+        t.add_row(r.option, str(r.expiry), f"{r.strike:g}", r.cp, f"{r.open_interest:,}",
+                  f"{r.volume:,}", f"{r.bid:.2f}", f"{r.ask:.2f}",
+                  "" if pd.isna(r.iv) else f"{r.iv:.1%}")
+    console.print(t)
+    if save:
+        out = settings.paths.exports_dir / f"chain_{sym}_{cal.now_et():%Y%m%d_%H%M}.csv"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tables["chain_eod"].to_csv(out, index=False)
+        console.print(f"Full chain: {out}")
+
+
+@app.command()
+def report(
+    ctx: typer.Context,
+    as_of: Annotated[
+        datetime | None,
+        typer.Option("--date", formats=["%Y-%m-%d"],
+                     help="Snapshot date for the open-interest slides (default: latest)."),
+    ] = None,
+    out: Annotated[Path | None, typer.Option(help="Output .pptx path (default: exports/).")]
+    = None,
+) -> None:
+    """Build the daily positioning slides (PowerPoint) from the stored features."""
+    settings: Settings = ctx.obj
+    try:
+        path = report_mod.build_report(Storage(settings.paths.data_dir), settings,
+                                       as_of=as_of.date() if as_of else None, out=out)
+    except report_mod.ReportError as exc:
+        console.print(f"[yellow]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+    console.print(f"Report: {path}")
 
 
 @app.command()

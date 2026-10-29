@@ -100,6 +100,15 @@ def run_source(
     commit_every: int = 20,
 ) -> SourceSummary:
     summary = SourceSummary(source.name)
+    # A source may set its own batch size in config (e.g. option chains: ~4,000 fetches).
+    src_cfg = ctx.settings.source(source.name).model_extra or {}
+    commit_every = int(src_cfg.get("commit_every", commit_every))
+    # HTTP statuses that mean "this source has nothing for that key" rather than a failure
+    # (e.g. Cboe answers 403/404 for a symbol it has no chain for).
+    missing_statuses = frozenset(getattr(source, "missing_statuses", ()))
+    for spec in source.tables:  # leftovers from an interrupted run
+        if spec.write_mode == "parts":
+            storage.compact(spec)
     requests_: list[FetchRequest] = source.plan(dates, ctx)
     summary.planned = len(requests_)
     done = set() if force else ingest.ok_keys()
@@ -118,7 +127,9 @@ def run_source(
             "rows_parsed": 0, "status": "ok", "error_msg": None, "raw_path": None,
             "started_at": started,
         }
-        if not res.ok:
+        if res.status in missing_statuses:
+            row["status"], row["error_msg"] = "not_available", f"HTTP {res.status}: no data"
+        elif not res.ok:
             row["status"] = "http_error" if res.status is not None else "network_error"
             row["error_msg"] = f"[{res.error_kind}] {res.error}"
         else:
@@ -156,6 +167,12 @@ def run_source(
         if len(batch.rows) >= commit_every:
             batch.commit()
     batch.commit()
+    for spec in source.tables:
+        if spec.write_mode == "parts":
+            storage.compact(spec)
+    after_run = getattr(source, "after_run", None)
+    if after_run is not None:
+        after_run(ctx, storage)
     return summary
 
 

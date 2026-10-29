@@ -27,6 +27,7 @@ dependencies = [
     "truststore>=0.9",
     "streamlit>=1.37",
     "plotly>=5.20",
+    "python-pptx>=1.0",
 ]
 
 [project.optional-dependencies]

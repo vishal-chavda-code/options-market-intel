@@ -120,6 +120,13 @@ def ordinal_map(order: list[str]) -> dict[str, str]:
     return {name: ramp[min(i, len(ramp) - 1)] for i, name in enumerate(order)}
 
 
+def short(x) -> str:
+    """1_234_567 -> '1.2M' for metric tiles."""
+    from omi.report import fmt_num
+
+    return fmt_num(x) or "0"
+
+
 def surface() -> str:
     return "#0e1117" if mode() == "dark" else "#ffffff"
 

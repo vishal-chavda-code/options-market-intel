@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from omi.sources.base import Source
+from omi.sources.cboe_chains import CboeChains
 from omi.sources.cboe_daily_stats import CboeDailyStats
 from omi.sources.occ_contract_volume import OccContractVolume
 from omi.sources.occ_daily_volume import OccDailyVolume
@@ -19,5 +20,6 @@ REGISTRY: dict[str, Source] = {
         OccWeeklyClass(),
         OccDailyVolume(),
         CboeDailyStats(),
+        CboeChains(),  # last: reads occ_contract_volume and ref_listed_symbols for its list
     )
 }

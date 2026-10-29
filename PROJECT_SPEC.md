@@ -37,12 +37,38 @@
 ### 0.2 Revised build phases (replace Section 12 phases 1–5 for now)
 
 1. **Done 2026-10-29:** storage (raw gz archive, ingest log, PK upserts), runner, the six sources above, classification + features (`omi features`), CLI `backfill` / `daily` / `features` / `health`, dashboard pages *Home (product mix)*, *Symbols*, *Weekly by class*, *Cboe open interest*, *Data health*.
-2. **Next:** run `omi daily` at work every evening (Task Scheduler). This is urgent because the contract-volume history is only ~30 sessions deep. Then: Phase 6 hardening (`register_tasks.ps1`, morning retry), per-strike detail for chosen symbols via Cboe chains (5.4), and the 0.3 open questions below.
+2. **Next:** run `scripts/register_tasks.ps1` at work so `omi daily` runs every evening. This is urgent because the contract-volume history is only ~30 sessions deep. Then: compliance sign-off for the Cboe chain endpoint (0.2a), and the 0.3 open questions below.
+
+### 0.2a Option chains added (2026-10-29, second revision)
+
+The user wants **open interest and premium per contract, for any symbol** (a day-lagged,
+free stand-in for Bloomberg OMON) for reporting, with a **rolling 45-session window**.
+Built: `cboe_chains` source (all optionable underlyings, nightly), tables `chain_eod`
+(day-partitioned, "parts" write mode + compaction, rolling retention) and `chain_underlying`,
+features `chain_underlying_daily` / `chain_contract_changes` / `chain_report_latest`, `omi chain
+SYM` (on demand), dashboard page *Open interest*, `omi report` (python-pptx deck), and
+`scripts/register_tasks.ps1` / `run_daily.ps1`.
+
+Decisions:
+- **Snapshot window:** only on the session's own calendar evening, after 16:15 ET. A pre-open
+  snapshot would carry OCC's next-day OI, which would make day-over-day changes inconsistent.
+- **Universe:** every OSTK/OIND underlying with volume on the latest stored OCC contract-volume
+  day, plus names snapshotted earlier in the month (sticky), plus `universe`. Ordered universe
+  first, then by volume.
+- **Missing symbols:** HTTP 403/404 from Cboe = `not_available` (runner `missing_statuses`).
+- **Sizing (full-size synthetic run, random values):** 4,317 symbols, 1.52M contracts/day,
+  ~108 s processing per night excluding download, 98 MB/day Parquet, features 3 s.
+  Download at 1 req/s: ~75 min.
+- **Not verified live** (the build sandbox can't reach cdn.cboe.com): Cboe's response for
+  unknown symbols, share-class URL form (`BRK.B` assumed), and the largest chain sizes (SPX).
+  First `omi daily` at work answers these; check `omi health` and the not_available count.
 
 ### 0.3 Open questions from this revision
 - Confirm the narrow/broad entries marked `low` / `unclassified` in `index_underlyings.csv`.
 - ~~Should ETFs also be split broad-market vs sector/thematic?~~ **No** (user, 2026-10-29). ETFs stay one class.
 - Which symbols beyond the top-N should always get the call/put query (`universe.extra`)?
+- Compliance: OK to use Cboe's delayed-chain JSON for internal reporting?
+- Which slides matter for the actual report audience? (Current deck is a first cut.)
 
 ---
 

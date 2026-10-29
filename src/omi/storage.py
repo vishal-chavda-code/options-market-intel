@@ -15,6 +15,7 @@ import gzip
 import hashlib
 import os
 import secrets
+import shutil
 import time
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -110,6 +111,12 @@ class Storage:
         if df.empty:
             return 0
         parts = df[spec.partition_col].map(spec.partition_value)
+        if spec.write_mode == "parts":
+            for part, new_rows in df.groupby(parts, sort=True):
+                folder = self.table_dir(spec.name) / str(part)
+                name = f"part-{datetime.now(UTC):%Y%m%dT%H%M%S}-{secrets.token_hex(4)}.parquet"
+                write_parquet_atomic(new_rows.reset_index(drop=True), folder / name)
+            return len(df)
         for part, new_rows in df.groupby(parts, sort=True):
             path = self.table_dir(spec.name) / str(part) / "data.parquet"
             if path.exists():
@@ -122,6 +129,62 @@ class Storage:
             merged = merged.sort_values(list(spec.pk), kind="stable").reset_index(drop=True)
             write_parquet_atomic(merged, path)
         return len(df)
+
+    def compact(self, spec: TableSpec) -> int:
+        """Fold pending part files into each partition's data.parquet (newest row per PK wins).
+
+        Readers only ever see data.parquet, so a table written in "parts" mode is consistent
+        once this has run. Safe to call at any time; returns the partitions compacted.
+        """
+        done = 0
+        for folder in sorted(p for p in self.table_dir(spec.name).glob("*") if p.is_dir()):
+            parts = sorted(folder.glob("part-*.parquet"))
+            if not parts:
+                continue
+            files = [*parts]
+            main = folder / "data.parquet"
+            if main.exists():
+                files.insert(0, main)
+            file_list = ", ".join(f"'{f.as_posix()}'" for f in files)
+            pk = ", ".join(spec.pk)
+            tmp = folder / "data.parquet.tmp"
+            with duckdb.connect() as con:
+                con.execute(f"""
+                    COPY (
+                        SELECT * EXCLUDE (_rn) FROM (
+                            SELECT *, row_number() OVER (
+                                PARTITION BY {pk} ORDER BY fetched_at DESC) AS _rn
+                            FROM read_parquet([{file_list}], union_by_name = true,
+                                              hive_partitioning = false)
+                        ) WHERE _rn = 1 ORDER BY {pk}
+                    ) TO '{tmp.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
+                """)
+            _replace_with_retry(tmp, main)
+            for p in parts:
+                p.unlink(missing_ok=True)
+            done += 1
+        return done
+
+    def drop_old_partitions(self, spec: TableSpec, keep: int) -> list[str]:
+        """Delete all but the newest ``keep`` partitions of a table (rolling retention)."""
+        folders = sorted(p for p in self.table_dir(spec.name).glob("*=*") if p.is_dir())
+        dropped = folders[:-keep] if keep > 0 else folders
+        for folder in dropped:
+            shutil.rmtree(folder, ignore_errors=True)
+        return [f.name for f in dropped]
+
+    def prune_raw(self, source: str, before: date) -> int:
+        """Delete a source's raw files whose as-of date (file name prefix) is before ``before``."""
+        removed = 0
+        for path in (self.raw_dir / source).rglob("*.gz"):
+            try:
+                as_of = date.fromisoformat(path.name[:10])
+            except ValueError:
+                continue
+            if as_of < before:
+                path.unlink(missing_ok=True)
+                removed += 1
+        return removed
 
     def read_latest(self, name: str) -> pd.DataFrame:
         """Rows of the table's most recent partition (partition names sort chronologically)."""
@@ -163,6 +226,25 @@ class IngestLog:
             (r.source, r.report, pd.Timestamp(r.as_of_date).date(), r.key or "")
             for r in df.itertuples(index=False)
         }
+
+    def compact(self, max_parts: int = 200) -> int:
+        """Merge the log's part files into one once there are more than ``max_parts``.
+
+        The option-chain source logs ~4,000 fetches a night, so without this the log would
+        grow by hundreds of small files per day and every run would slow down reading it.
+        Returns the number of files merged (0 if below the threshold).
+        """
+        self.flush()
+        files = sorted(self.dir.glob("part-*.parquet"))
+        if len(files) <= max_parts:
+            return 0
+        df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+        target = self.dir / f"part-{self.run_id}-compacted-{secrets.token_hex(2)}.parquet"
+        write_parquet_atomic(df, target)
+        for f in files:
+            if f != target:
+                f.unlink(missing_ok=True)
+        return len(files)
 
     def add(self, row: dict) -> None:
         self._pending.append({"run_id": self.run_id, **row})

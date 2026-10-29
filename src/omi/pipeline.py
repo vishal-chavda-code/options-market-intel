@@ -11,7 +11,7 @@ import pandas as pd
 
 from omi import calendar as cal
 from omi.config import Settings
-from omi.features import product_class
+from omi.features import chains, product_class
 from omi.http import HttpClient
 from omi.quality import conform
 from omi.runner import Fetcher, SourceSummary, run_source
@@ -93,9 +93,23 @@ def daily(
     for _ in range(settings.pipeline.daily_catchup_sessions):
         start = cal.previous_session(start)
     summaries = backfill(settings, None, start, end, force=force, http=http)
-    counts = product_class.build(Storage(settings.paths.data_dir), settings)
+    storage = Storage(settings.paths.data_dir)
+    counts = build_features(storage, settings)
     log.info("features rebuilt: %s", counts)
+    merged = IngestLog(storage.meta_dir, new_run_id()).compact()
+    if merged:
+        log.info("ingest log: merged %d part files", merged)
     return summaries
+
+
+def build_features(storage: Storage, settings: Settings) -> dict[str, int]:
+    """Every feature family, in dependency order (chain features use the product classes)."""
+    counts = product_class.build(storage, settings)
+    try:
+        counts.update(chains.build(storage, settings))
+    except Exception:  # noqa: BLE001 - chain features must never block the OCC features
+        log.exception("chain features failed")
+    return counts
 
 
 def import_seed(settings: Settings, seed_dir: Path) -> dict[str, int]:
