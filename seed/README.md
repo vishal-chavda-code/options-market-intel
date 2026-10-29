@@ -26,7 +26,10 @@ so nothing produced at work can be committed back (spec C3).
 
 ## Rules
 
-- **Keep the GitHub repo private.** This is OCC, Cboe and Nasdaq website data for internal
-  use; publishing it would be redistribution (spec §13).
+- **Direction: personal → work only.** This is public data downloaded on the personal
+  machine. Nothing from the work machine's `data\` is ever committed (spec C3).
+- **Repo visibility:** the data is public, but OCC / Cboe / Nasdaq website terms generally
+  cover viewing and internal use rather than republishing (spec §13). A private repo keeps it
+  internal.
 - This folder is a snapshot, not a sync. Don't keep committing new data here; git is a poor
   store for a growing archive. The work machine's `data\` is the archive from now on.
